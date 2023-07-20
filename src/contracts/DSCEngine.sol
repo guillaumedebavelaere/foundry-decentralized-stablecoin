@@ -106,7 +106,6 @@ contract DSCEngine is ReentrancyGuard {
      * @notice The collateral value must be higher than the minimum threshold.
      */
     function mintDSC(uint256 amountToMint) external moreThanZero(amountToMint) nonReentrant {
-        // _userTokenCollateralDeposited[msg.sender];
         userDSCMinted[msg.sender] += amountToMint;
 
         revertIfHealthFactorIsBroken(msg.sender);
