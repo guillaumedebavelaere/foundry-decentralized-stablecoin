@@ -6,6 +6,8 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "./libraries/OracleLib.sol";
+
 /**
  * @title DSCEngine
  * @author Guillaume Debavelaere
@@ -25,7 +27,6 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/Ag
  */
 
 contract DSCEngine is ReentrancyGuard {
-    using SafeERC20 for IERC20;
 
     error DSCEngine__RequiresMoreThanZero();
     error DSCEngine__ArrayLengthMismatch();
@@ -36,6 +37,9 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__MintError();
     error DSCEngine__HealthFactorOk();
     error DSCEngine__HealthFactorNotImproved();
+
+    using SafeERC20 for IERC20;
+    using OracleLib for AggregatorV3Interface;
 
     uint256 private constant ADDITIONAL_FEED_PRECISION = 10 ** 10;
     uint256 private constant PRECISION = 10 ** 18;
@@ -169,18 +173,22 @@ contract DSCEngine is ReentrancyGuard {
         nonReentrant
     {
         uint256 startingHealthFactor = _healthFactor(user);
+        
         if (startingHealthFactor >= MIN_HEALTH_FACTOR) {
             revert DSCEngine__HealthFactorOk();
         }
         //uint256 tokenAmountFromDebtCovered = debtToCover * PRECISION / getUSDValue(tokenCollateralAddress, 1);
         uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(tokenCollateralAddress, debtToCover);
-        uint256 bonusCollateral = tokenAmountFromDebtCovered * LIQUIDATION_BONUS / LIQUIDATION_PRECISION;
+        
+        uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        
         uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
-
-        _burnDSC(debtToCover, user, msg.sender);
+        
         _redeemCollateral(tokenCollateralAddress, totalCollateralToRedeem, user, msg.sender);
+        _burnDSC(debtToCover, user, msg.sender);
 
         uint256 endingUserHealthFactor = _healthFactor(user);
+        
         if (endingUserHealthFactor <= startingHealthFactor) {
             revert DSCEngine__HealthFactorNotImproved();
         }
@@ -193,6 +201,22 @@ contract DSCEngine is ReentrancyGuard {
 
     function getHealthFactor() external view returns (uint256) {
         return _healthFactor(msg.sender);
+    }
+
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getAllowedCollateralAddresses() external view returns (address[] memory) {
+        return _allowedCollateralTokens;
+    }
+
+    function getCollateralBalance(address user, address token) external view returns (uint256) {
+        return _userTokenCollateralDeposited[user][token];
+    }
+
+    function getTokenPriceFeed(address token) external view returns (address) {
+        return _tokenPriceFeeds[token];
     }
 
     function getAccountInformation()
@@ -219,14 +243,14 @@ contract DSCEngine is ReentrancyGuard {
 
     function getUSDValue(address token, uint256 amount) public view returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(_tokenPriceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
+        (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
         return (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
     }
 
     function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(_tokenPriceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
-        return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);
+        (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
+        return ((usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION));
     }
 
     /////////////////////////////////
@@ -273,7 +297,7 @@ contract DSCEngine is ReentrancyGuard {
             return type(uint256).max;
         }
         uint256 collateralAdjustedForThreshold =
-            totalCollateralValuesInUsd * LIQUIDATION_THRESHOLD / LIQUIDATION_PRECISION;
+            (totalCollateralValuesInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
         return (collateralAdjustedForThreshold * PRECISION) / totalDSCMinted;
     }

@@ -8,6 +8,7 @@ import {DecentralizedStableCoin} from "../../src/contracts/DecentralizedStableCo
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
 import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
+import {console} from "forge-std/console.sol";
 
 contract DSCEngineTest is Test {
     DeployDSC private _deployDSC;
@@ -19,15 +20,14 @@ contract DSCEngineTest is Test {
     address private _wbtcUsdPriceFeed;
     address private _user = makeAddr("user");
     address private _liquidator = makeAddr("liquidator");
+    uint256 private _collateralToCover = 20 ether;
     uint256 private constant _STARTING_WETH_USER_BALANCE = 10 ether;
-    uint256 private constant _STARTING_WETH_LIQUIDATOR_BALANCE = 45 ether;
 
     function setUp() public {
         _deployDSC = new DeployDSC();
         (_dsc, _dscEngine, _helperConfig) = _deployDSC.run();
         (_wethUsdPriceFeed, _wbtcUsdPriceFeed, _weth,,) = _helperConfig.activeNetworkConfig();
         ERC20Mock(_weth).mint(_user, _STARTING_WETH_USER_BALANCE);
-        ERC20Mock(_weth).mint(_liquidator, _STARTING_WETH_LIQUIDATOR_BALANCE);
     }
 
     ////////////////////////////////////////
@@ -366,7 +366,7 @@ contract DSCEngineTest is Test {
         uint256 healthFactorAfter = _dscEngine.getHealthFactor();
         assertLt(healthFactorAfter, 1 ether);
         vm.stopPrank();
-
+        ERC20Mock(_weth).mint(_liquidator, 20 ether);
         vm.startPrank(_liquidator);
         ERC20Mock(_weth).approve(address(_dscEngine), 15 ether);
         _dscEngine.depositCollateralAndMintDSC(_weth, 15 ether, 2000 ether);
@@ -380,34 +380,48 @@ contract DSCEngineTest is Test {
     }
 
     function testLiquidate() public {
+        uint256 amountCollateral = 10 ether; // 1 ether = mocked to 2000 USD
+        uint256 amountToMint = 100 ether; // 100 DSC
         // Given
         vm.startPrank(_user);
-        ERC20Mock(_weth).approve(address(_dscEngine), 1 ether);
-        _dscEngine.depositCollateralAndMintDSC(_weth, 1 ether, 1000 ether);
+        
+        ERC20Mock(_weth).approve(address(_dscEngine), amountCollateral);
+        _dscEngine.depositCollateralAndMintDSC(_weth, amountCollateral, amountToMint);
+        
         uint256 healthFactorBefore = _dscEngine.getHealthFactor();
         assertGe(healthFactorBefore, 1 ether);
 
         // Given collateral price is down and the health factor is broken
-        MockV3Aggregator(_wethUsdPriceFeed).updateAnswer(500 * 10 ** 8); // 500 usd
+        MockV3Aggregator(_wethUsdPriceFeed).updateAnswer(18 * 10 ** 8); // 1 ether = 18 usd
         uint256 healthFactorAfter = _dscEngine.getHealthFactor();
+
         assertLt(healthFactorAfter, 1 ether);
         vm.stopPrank();
+        
+
+        ERC20Mock(_weth).mint(_liquidator, _collateralToCover); // mint 20 ether to the liquidator
 
         vm.startPrank(_liquidator);
-        ERC20Mock(_weth).approve(address(_dscEngine), 15 ether);
-        _dscEngine.depositCollateralAndMintDSC(_weth, 15 ether, 2000 ether);
+        ERC20Mock(_weth).approve(address(_dscEngine), _collateralToCover);
+        // deposit 20 ether as collateral and mint 100 DSC
+        _dscEngine.depositCollateralAndMintDSC(_weth, _collateralToCover, amountToMint);
 
         // When
-        _dsc.approve(address(_dscEngine), 454 ether);
-        _dscEngine.liquidate(_weth, _user, 454 ether);
-
-        // Then
-        assertEq(_dsc.balanceOf(_user), 0 ether);
-        assertEq(_dsc.balanceOf(_liquidator), 1000 ether);
-        assertEq(ERC20Mock(_weth).balanceOf(_user), _STARTING_WETH_USER_BALANCE - 1 ether);
-        assertEq(ERC20Mock(_weth).balanceOf(_liquidator), _STARTING_WETH_LIQUIDATOR_BALANCE - 15 ether);
-
+        // approve 100 DSC to be spent by the DSCEngine
+        _dsc.approve(address(_dscEngine), amountToMint);
+        // liquidate 100 DSC
+        _dscEngine.liquidate(_weth, _user, amountToMint);
         vm.stopPrank();
+        // Then
+        uint256 expectedLiquidatorWeth = _dscEngine.getTokenAmountFromUsd(_weth, amountToMint)
+            + (_dscEngine.getTokenAmountFromUsd(_weth, amountToMint) / _dscEngine.getLiquidationBonus());
+
+        assertEq(_dsc.balanceOf(_user), 100 ether);
+        assertEq(_dsc.balanceOf(_liquidator), 0 ether);
+        assertEq(ERC20Mock(_weth).balanceOf(_user), _STARTING_WETH_USER_BALANCE - amountCollateral);
+        assertEq(ERC20Mock(_weth).balanceOf(_liquidator), expectedLiquidatorWeth);
+
+        
     }
 
     ////////////////////////////////////////
