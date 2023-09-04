@@ -42,8 +42,8 @@ A decentralized stablecoin that is:
   - use Chainlink to get the price feed.
   - has a function to exchange ETH or BTC against our stablecoin
 - Algorithmic (Stability mechanism ie: minting / burning), so decentralized
-  - People can conly mint the stablecoin with enough collateral (coded)
-- Exogenous (use crypto collateral: wETH, wBTC)
+  - People can only mint the stablecoin with enough collateral (coded)
+- Exogenous (Collateral that originates from  outside the protocol: wETH, wBTC)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
